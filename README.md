@@ -71,7 +71,8 @@ The Drops Token Contract is an ERC20 token smart contract built on Ethereum. It 
 1. Clone the repository:
 ~ git clone [repository link]
 
-2. Install necessary dependencies:
+2. Install dependencies:
+   
 Openzeppelin:
 - Ownable.sol
 - ERC20.sol
