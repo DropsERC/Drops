@@ -1,4 +1,11 @@
-# LPMarketplace
+# Drops ERC
+Drops is an ERC20, token-integrated locked liquidity marketplace, allowing;
+1. Holders to stabilize token price via staking and liquidity provision in return for a share of total platform revenues.
+2. Marketplace users to actively trade locked liquidity, a once illiquid asset.
+
+Below is a breakdown of our two main smart contracts, LPMarketplace.sol [Marketplace contract] and Drops.sol [Token contract].
+
+# LPMarketplace.sol
 
 ## Description
 LPMarketplace is a decentralized platform built on the Ethereum blockchain, enabling users to list and sell their Uniswap V2 LP token lock ownerships. It provides a secure and transparent way for users to trade LP token locks that are locked through Unicrypt.
@@ -43,7 +50,7 @@ To use the LPMarketplace contract:
 - `changePriceInETH`: Change the ETH price of a listing.
 - `changePriceInDrops`: Change the Drops token price of a listing.
 
-# Drops Token Contract
+# Drops.sol 
 
 ## Description
 The Drops Token Contract is an ERC20 token smart contract built on Ethereum. It integrates with Uniswap for liquidity provision and includes features like swap-and-liquify, trading controls, and dynamic taxation for transactions.
