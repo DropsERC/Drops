@@ -1,7 +1,7 @@
 # Drops ERC
-## Drops is an ERC20, token-integrated locked liquidity marketplace, allowing;
-1. Holders to stabilize token price via staking and liquidity provision in return for a share of total platform revenues.
-2. Marketplace users to actively trade locked liquidity, a once illiquid asset.
+Drops is an ERC20, token-integrated locked liquidity marketplace, allowing;
+- Holders to stabilize token price via staking and liquidity provision in return for a share of total platform revenues.
+- Marketplace users to actively trade locked liquidity, a once illiquid asset.
 
 Below is a breakdown of our two main smart contracts, LPMarketplace.sol [Marketplace contract] and Drops.sol [Token contract].
 
