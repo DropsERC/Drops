@@ -14,7 +14,6 @@ LPMarketplace is a decentralized platform built on the Ethereum blockchain, enab
 - List LP token locks for sale.
 - Purchase LP token locks with ETH or Drops tokens.
 - Secure and non-reentrant contract design.
-- Transfer ownership of LP token locks.
 
 ## Prerequisites
 - Solidity ^0.8.0
