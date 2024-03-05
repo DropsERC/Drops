@@ -7,6 +7,8 @@ Below is a breakdown of our two main smart contracts, [LPMarketplace.sol](contra
 
 # [LPMarketplace.sol](contracts/LPMarketplace.sol)
 
+https://etherscan.io/address/0x13de9d300739918f3ab95649177a2d2e7d8efc20
+
 ## Description
 LPMarketplace is a decentralized platform built on the Ethereum blockchain, enabling users to list and sell their Uniswap V2 LP token lock ownerships. It provides a secure and transparent way for users to trade LP token locks that are locked through Unicrypt.
 
