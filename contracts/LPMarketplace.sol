@@ -74,7 +74,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     // Native Drops token address
     IERC20 public dropsToken;
     address payable public feeWallet;
-    uint256 listingCount;
+    uint256 public listingCount;
     address public marketplaceOwner;
     uint256 public activeListings;
     uint256 public listedLPsCount;
@@ -89,25 +89,32 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     // Relevant listing info
     struct Listing {
         uint256 lockID;
+        uint256 listingID;
+        uint256 listingIndex;
         address payable seller;
         address lpAddress;
         uint256 priceInETH;
         uint256 priceInDrops;
+        uint256 listDate;
         bool isActive;
         bool isSold;
-        uint256 userLockIndex;
         address payable referral;
+        bool isVerified;
+    }
+
+    struct ListingDetail {
+        uint256 lockID;
+        address lpAddress;
     }
 
     // lpAddress + lockID -> returns Listing
     mapping(address => mapping(uint256 => Listing)) public lpToLockID;
-    // lpAddress -> Listing[] associated to lpAddress
-    mapping(address => Listing[]) public lpToListings;
-    mapping(uint256 => address) public listedLPs;
+    mapping(address => mapping(uint256 => uint256)) public cooldowns;
+    mapping(uint256 => ListingDetail) public listingDetail;
     mapping(address => bool) public isLPListed;
 
     // Relevant events
-    event LockPurchasedWithDrops(
+    event LockPurchasedWithETH(
         address lpToken,
         uint256 lockID,
         uint256 profitInETH,
@@ -118,13 +125,20 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         uint256 lockID,
         uint256 profitInDrops
     );
-    event ListingInitiated(address lpToken, uint256 lockID, address seller);
+    event ListingInitiated(
+        address lpToken, 
+        uint256 lockID, 
+        address seller);
     event NewActiveListing(
         address lpToken,
         uint256 lockID,
         uint256 priceInETH,
         uint256 priceInDrops
     );
+    event LockVerified(
+        address lpToken, 
+        uint256 lockID, 
+        bool status);
     event ListingWithdrawn(address lpToken, uint256 lockID);
     event DropsAddressUpdated(address _dropsAddress);
     event FeeAddressUpdated(address _feeWallet);
@@ -152,7 +166,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     /// @notice Set the eth fee (in percentage)
     /// @dev This function can only be called by the contract owner
     /// @param _ethFee Fee percentage for buyLockWithETH
-    function setETHFee (uint256 _ethFee) external onlyOwner {
+    function setETHFee(uint256 _ethFee) external onlyOwner {
         require(_ethFee < 10, "Maximum fee is 10%");
         require(ethFee != _ethFee, "You must change the fee");
         ethFee = _ethFee;
@@ -226,24 +240,34 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             (_priceInETH > 0) || (_priceInDrops > 0),
             "You must set a price in Drops or ETH"
         );
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
+        (bool lockFound, uint256 index) = _getIndexForUserLock(
+            _lpAddress,
+            _lockID,
+            _msgSender()
+        );
+        require(lockFound, "Lock not found!");
 
-        (bool lockFound, uint256 index) = _getIndexForUserLock(_lpAddress, _lockID, msg.sender);
-        require(lockFound, "Unable to locate lock index.");
+        if (tempListing.listingID == 0) {
+            listingCount++;
+            listingDetail[listingCount] = ListingDetail(_lockID, _lpAddress);
+        }
         lpToLockID[_lpAddress][_lockID] = Listing(
             _lockID,
+            listingCount,
+            index,
             payable(msg.sender),
             _lpAddress,
             _priceInETH,
             _priceInDrops,
+            block.timestamp,
             false,
             false,
-            index,
-            _referral
+            _referral,
+            false
         );
-        listingCount++;
         if (!isLPListed[_lpAddress]) {
             isLPListed[_lpAddress] = true;
-            listedLPs[listedLPsCount] = _lpAddress;
             listedLPsCount++;
         }
         emit ListingInitiated(_lpAddress, _lockID, msg.sender);
@@ -273,10 +297,6 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         );
     }
 
-    /// @notice Fetch listing struct from lpToLockID mapping
-    /// @param lpAddress Address of the LP token
-    /// @param lockID Unique lockID (per lpAddress) of the lock
-    /// @return Listing Unique listing struct
     function fetchListing(
         address lpAddress,
         uint256 lockID
@@ -298,6 +318,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             msg.value == tempListing.priceInETH,
             "Incorrect amount of ETH."
         );
+        require(block.timestamp >= cooldowns[lpAddress][lockID],"Wait until cooldown expires");
 
         (bool lockFound, uint256 index) = _getIndex(lpAddress, tempListing);
 
@@ -306,13 +327,12 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         uint256 feeAmount = msg.value / ethFee;
         uint256 toPay = msg.value - feeAmount;
 
-        if(tempListing.referral != zeroAddress) {
-            uint256 feeForReferral = feeAmount * referralBonus / ethFee;
+        if (tempListing.referral != zeroAddress) {
+            uint256 feeForReferral = (feeAmount * referralBonus) / ethFee;
             feeAmount = feeAmount - feeForReferral;
             tempListing.referral.transfer(feeForReferral);
             feeWallet.transfer(feeAmount);
-        }
-        else {
+        } else {
             feeWallet.transfer(feeAmount);
         }
 
@@ -329,7 +349,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             payable(msg.sender)
         );
 
-        emit LockPurchasedWithDrops(
+        emit LockPurchasedWithETH(
             tempListing.lpAddress,
             tempListing.lockID,
             toPay,
@@ -353,6 +373,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             dropsToken.balanceOf(msg.sender) > tempListing.priceInDrops,
             "Insufficient drops."
         );
+        require(block.timestamp >= cooldowns[lpAddress][lockID],"Wait until cooldown expires");
 
         (bool lockFound, uint256 index) = _getIndex(lpAddress, tempListing);
 
@@ -383,13 +404,21 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         );
     }
 
+    function getIndex(
+        address _user,
+        address _lpAddress,
+        uint256 _lockID
+    ) external view returns (bool, uint256) {
+        return _getIndexForUserLock(_lpAddress, _lockID, _user);
+    }
+
     /// @notice Find unique (per lpAddress) lock index in order to transfer lock ownership
     /// @param _lpAddress Address of the LP token
     /// @param _listing Listing in question
     function _getIndex(
         address _lpAddress,
         Listing memory _listing
-    ) internal returns (bool, uint256) {
+    ) internal view returns (bool, uint256) {
         uint256 index;
         uint256 numLocksAtAddress = uniswapV2Locker.getUserNumLocksForToken(
             address(this),
@@ -417,15 +446,11 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         return (lockFound, index);
     }
 
-    /// @notice Finds lock index per user address
-    /// @param _lpAddress Address of the LP token
-    /// @param _lockID The ID of the lock
-    /// @param user Address in question
     function _getIndexForUserLock(
         address _lpAddress,
         uint256 _lockID,
         address user
-    ) internal returns (bool, uint256) {
+    ) internal view returns (bool, uint256) {
         uint256 index;
         uint256 numLocksAtAddress = uniswapV2Locker.getUserNumLocksForToken(
             user,
@@ -438,11 +463,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         } else {
             for (index = 0; index < numLocksAtAddress; index++) {
                 (, , , , uint256 _tempLockID, ) = uniswapV2Locker
-                    .getUserLockForTokenAtIndex(
-                        address(this),
-                        _lpAddress,
-                        index
-                    );
+                    .getUserLockForTokenAtIndex(user, _lpAddress, index);
                 if (_tempLockID == _lockID) {
                     lockFound = true;
                     break;
@@ -491,6 +512,21 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         emit ListingWithdrawn(lpAddress, lockID);
     }
 
+    /// @notice Verify a listing as safe
+    /// @dev Only dev can verify listings
+    /// @param lpAddress Address of the LP token
+    /// @param lockID Unique lock ID (per lpAdress) of the lock
+    /// @param status Status of verification
+    function verifyListing(
+        address lpAddress, 
+        uint256 lockID,
+        bool status) external onlyOwner {
+            Listing storage tempListing = lpToLockID[lpAddress][lockID];
+            require(status != tempListing.isVerified, "Must change listing status");
+            tempListing.isVerified = true;
+            emit LockVerified(lpAddress, lockID, status);
+    }
+
     /// @notice Change the ETH price of a listing
     /// @dev Only seller can change price
     /// @param lpAddress Address of the LP token
@@ -506,6 +542,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             tempListing.seller == msg.sender,
             "This listing does not belong to you."
         );
+        cooldowns[lpAddress][lockID] = block.timestamp + 5;
         tempListing.priceInETH = newPriceInETH;
     }
 
@@ -524,6 +561,31 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             tempListing.seller == msg.sender,
             "This listing does not belong to you."
         );
+        cooldowns[lpAddress][lockID] = block.timestamp + 5;
         tempListing.priceInDrops = newPriceInDrops;
     }
+
+    /// @notice Return ownership of a lock to the original seller and remove the listing
+    /// @dev Only the contract owner can call this function
+    /// @param lpAddress Address of the LP token associated with the lock
+    /// @param lockID The ID of the lock to be redacted
+    function redactListing(address lpAddress, uint256 lockID) external onlyOwner {
+        Listing storage listing = lpToLockID[lpAddress][lockID];
+
+        require(listing.seller != address(0), "Listing does not exist.");
+
+        (bool lockFound, uint256 index) = _getIndex(lpAddress, listing);
+        require(lockFound, "Lock not found.");
+
+        uniswapV2Locker.transferLockOwnership(lpAddress, index, lockID, listing.seller);
+        
+        if (listing.isActive) {
+            listing.isActive = false;
+            activeListings--;
+        }
+        
+        delete lpToLockID[lpAddress][lockID];
+        emit ListingRedacted(lpAddress, lockID, listing.seller);
+    }
+
 }
