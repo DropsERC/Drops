@@ -1,4 +1,4 @@
-//SPDX-Liscence-Identifier: MIT
+//SPDX-Lisence-Identifier: MIT
 
 /*⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣾⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
@@ -17,7 +17,6 @@
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠙⠛⠛⠛⠛⠋⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ 
 
 Drops Lock Marketplace is the first locked liquidity marketplace.
-Supports strictly UNCX LP locks.
 
 https://drops.site
 https://t.me/dropserc
@@ -28,9 +27,9 @@ $DROPS token address -> 0xA562912e1328eEA987E04c2650EfB5703757850C
 */
 
 pragma solidity ^0.8.0;
-import "./Ownable.sol";
-import "./IERC20.sol";
-import "./ReentrancyGuard.sol";
+import "dependencies/openzeppelin-contracts/contracts/access/Ownable.sol";
+import "dependencies/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import "dependencies/openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
 interface IUniswapV2Locker {
     // Getter function to fetch details about a specific lock for a user
@@ -139,6 +138,11 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         address lpToken, 
         uint256 lockID, 
         bool status);
+    event ListingRedacted(
+        address lpToken,
+        uint256 lockID,
+        address seller
+    );
     event ListingWithdrawn(address lpToken, uint256 lockID);
     event DropsAddressUpdated(address _dropsAddress);
     event FeeAddressUpdated(address _feeWallet);
@@ -583,7 +587,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             listing.isActive = false;
             activeListings--;
         }
-        
+
         delete lpToLockID[lpAddress][lockID];
         emit ListingRedacted(lpAddress, lockID, listing.seller);
     }
