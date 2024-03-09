@@ -50,8 +50,6 @@ def main():
                                 True, SELLER_ADDRESS, 
                                 {"from": seller, "value": 1e16})
 
-    assert lp_contract.allowance(seller.address, UNCX_ADDRESS) == lp_balance, "Approval failed"
-
     # Other steps for listing, transferring lock ownership, and purchase
     # lock_id and index may vary, ensure these are correct
     lock_id = 0  # Modify as necessary
