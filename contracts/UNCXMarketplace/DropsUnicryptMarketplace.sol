@@ -1,4 +1,4 @@
-//SPDX-Lisence-Identifier: MIT
+//SPDX-License-Identifier: MIT
 
 /*⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀.⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣾⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
@@ -17,14 +17,14 @@
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠙⠛⠛⠛⠛⠋⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀ 
 
 Drops Lock Marketplace is the first locked liquidity marketplace.
-This smart contract is our Unicrypt Liquidity Lock marketplace.
+This smart contract is our Unicrypt LP lock marketplace.
 
 https://drops.site
 https://t.me/dropserc
 https://x.com/dropserc
 
 $DROPS token address -> 0xA562912e1328eEA987E04c2650EfB5703757850C
-
+ 
 */
 
 pragma solidity ^0.8.0;
@@ -67,7 +67,7 @@ interface IUniswapV2Locker {
 
 /// @title Marketplace for LP Token Lock Ownership
 /// @notice This contract allows users to list and sell their Uniswap V2 LP token lock ownerships locked through Unicrypt.
-contract DropsLockMarketplace is Ownable, ReentrancyGuard {
+contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
     // Unicrypt V2 Locker address
     IUniswapV2Locker public uniswapV2Locker;
 
@@ -100,6 +100,15 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         bool isSold;
         address payable referral;
         bool isVerified;
+        bool forAuction;
+        uint256 auctionIndex;
+    }
+
+    struct Bid {
+        address bidder;
+        uint256 dropsBid;
+        uint256 ethBid;
+        uint256 listingID;
     }
 
     struct ListingDetail {
@@ -107,12 +116,37 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         address lpAddress;
     }
 
+    struct AuctionDetails {
+        Bid topEthBid;
+        Bid topDropsBid;
+        uint256 endTime;
+    }
+
     // lpAddress + lockID -> returns Listing
     mapping(address => mapping(uint256 => Listing)) public lpToLockID;
     mapping(uint256 => ListingDetail) public listingDetail;
     mapping(address => bool) public isLPListed;
+    mapping(address => Bid[]) public userBids;
+
+    // Auctions:
+    AuctionDetails[] auctions;
+    uint256 auctionCount;
 
     // Relevant events
+    event NewBid(
+        address bidder,
+        address lpAddress,
+        uint256 lockID,
+        uint256 bidInDrops,
+        uint256 bidInEth
+    );
+    event BidRedacted(
+        address bidder,
+        address lpAddress, 
+        uint256 lockId,
+        uint256 bidInDrops,
+        uint bidInEth
+    );
     event LockPurchasedWithETH(
         address lpToken,
         uint256 lockID,
@@ -127,7 +161,8 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     event ListingInitiated(
         address lpToken, 
         uint256 lockID, 
-        address seller);
+        address seller
+    );
     event NewActiveListing(
         address lpToken,
         uint256 lockID,
@@ -137,7 +172,8 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     event LockVerified(
         address lpToken, 
         uint256 lockID, 
-        bool status);
+        bool status
+    );
     event ListingRedacted(
         address lpToken,
         uint256 lockID,
@@ -222,42 +258,57 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
         emit LockerAddressUpdated(_uniswapV2Locker);
     }
 
+    function _initializeAuctionDetails(uint256 _endTime) internal pure returns (AuctionDetails memory) {
+        AuctionDetails memory blankAuctionDetails;
+        blankAuctionDetails.topEthBid = Bid(address(0), 0, 0, ListingDetail(0, address(0)));
+        blankAuctionDetails.topDropsBid = Bid(address(0), 0, 0, ListingDetail(0, address(0)));
+        blankAuctionDetails.endTime = _endTime;
+
+        return blankAuctionDetails;
+    }
+
     /// @notice List an LP token lock for sale
     /// @dev The seller must be the owner of the lock and approve this contract to manage the lock
     /// @param _lpAddress Address of the LP token
-    /// @param _lockID The ID of the lock
+    /// @param _lockId The ID of the lock
     /// @param _priceInETH The selling price in ETH
     /// @param _priceInDrops The selling price in Drops tokens
+    /// @param _forAuction Whether listing can receive bids
     function initiateListing(
         address _lpAddress,
-        uint256 _lockID,
+        uint256 _lockId,
         uint256 _priceInETH,
         uint256 _priceInDrops,
-        address payable _referral
+        address payable _referral,
+        bool _forAuction,
+        uint256 _endTime
     ) external {
         (, , , , , address owner) = uniswapV2Locker.tokenLocks(
             _lpAddress,
-            _lockID
+            _lockId
         );
         require(msg.sender == owner, "You dont own that lock.");
         require(
             (_priceInETH > 0) || (_priceInDrops > 0),
             "You must set a price in Drops or ETH"
         );
-        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockId];
         (bool lockFound, uint256 index) = _getIndexForUserLock(
             _lpAddress,
-            _lockID,
+            _lockId,
             _msgSender()
         );
         require(lockFound, "Lock not found!");
 
         if (tempListing.listingID == 0) {
             listingCount++;
-            listingDetail[listingCount] = ListingDetail(_lockID, _lpAddress);
+            listingDetail[listingCount] = ListingDetail(_lockId, _lpAddress);
         }
-        lpToLockID[_lpAddress][_lockID] = Listing(
-            _lockID,
+
+        AuctionDetails memory tempDetails = _initializeAuctionDetails(_endTime);
+
+        lpToLockID[_lpAddress][_lockId] = Listing(
+            _lockId,
             listingCount,
             index,
             payable(msg.sender),
@@ -268,30 +319,227 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             false,
             false,
             _referral,
-            false
+            false,
+            _forAuction,
+            auctionCount
         );
+
+        auctionCount++;
+
         if (!isLPListed[_lpAddress]) {
             isLPListed[_lpAddress] = true;
             listedLPsCount++;
         }
-        emit ListingInitiated(_lpAddress, _lockID, msg.sender);
+
+        emit ListingInitiated(_lpAddress, _lockId, msg.sender);
+    }
+
+    /// @notice Bid on a listing with Ethereum - transfer ETH to CA until bid is either beat, accepted, or withdrawn
+    /// @dev Bidder must not be listing owner.
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockId The ID of the lock
+    function bidEth (
+        address _lpAddress, 
+        uint256 _lockId
+    ) external payable {
+        Listing storage tempListing = lpToLockID[_lpAddress][_lockId];
+        require(tempListing.forAuction, "Listing not for auction");
+        require(tempListing.seller != msg.sender, "Unable to bid on own listing");
+        require(tempListing.isActive, "Listing inactive.");
+        require(!tempListing.isSold, "Listing already sold.");
+
+        AuctionDetails storage currentAuction = auctions[tempListing.auctionIndex];
+
+        if(currentAuction.endTime != 0) {
+            require(block.timestamp < currentAuction.endTime, "Auction closed");
+        }
+
+
+        require(msg.value > currentAuction.topEthBid.ethBid, "Must outbid current highest bid");
+        
+        if(currentAuction.topEthBid.ethBid > 0) {
+            payable(
+                currentAuction.topEthBid.bidder
+            ).transfer(currentAuction.topEthBid.ethBid);
+        }
+        
+        currentAuction.topEthBid = Bid(
+            msg.sender, 
+            0, 
+            msg.value, 
+            tempListing.listingID
+        );
+        
+        userBids[msg.sender].push(currentAuction.topEthBid);
+
+        emit NewBid(
+            msg.sender,
+            _lpAddress,
+            _lockId,
+            0,
+            msg.value
+        );
+    }
+
+    /// @notice Bid on a listing with Drops - transfer Drops to CA until bid is either beat, accepted, or withdrawn
+    /// @dev Bidder must not be listing owner
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockId The ID of the lock
+    /// @param _amount Amount of Drops to bid with
+    function bidDrops (
+        address _lpAddress, 
+        uint256 _lockId, 
+        uint256 _amount
+    ) external nonReentrant {
+        Listing storage tempListing = lpToLockID[_lpAddress][_lockId];
+        require(tempListing.forAuction, "Listing not for auction");
+        require(tempListing.seller != msg.sender, "Unable to bid on own listing");
+        require(tempListing.isActive, "Listing inactive.");
+        require(!tempListing.isSold, "Listing already sold.");
+
+        AuctionDetails storage currentAuction = auctions[tempListing.auctionIndex];
+
+        if(currentAuction.endTime != 0) {
+            require(block.timestamp < currentAuction.endTime, "Auction closed");
+        }
+
+        require(_amount > currentAuction.topDropsBid.dropsBid, "Must outbid current highest bid");
+        
+        if(currentAuction.topDropsBid.dropsBid > 0) {
+            dropsToken.transfer(
+                currentAuction.topDropsBid.bidder, 
+                currentAuction.topDropsBid.dropsBid);
+        }
+
+        dropsToken.transferFrom(
+            msg.sender, 
+            address(this), 
+            _amount
+        );
+
+        currentAuction.topDropsBid = Bid(
+            msg.sender, 
+            _amount, 
+            0, 
+            tempListing.listingID
+        );
+
+        userBids[msg.sender].push(currentAuction.topDropsBid);
+
+        emit NewBid(
+            msg.sender,
+            _lpAddress,
+            _lockId,
+            _amount,
+            0
+        );
+    }
+
+    /// @notice Redact your bid on select lock - must be done prior to the expiry date of auction.
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockId The ID of the lock
+    /// @param ethBid True if bidder is redacting a bid in ETH, false if bid is in Drops
+    function redactBid(
+        address _lpAddress, 
+        uint256 _lockId,  
+        bool ethBid
+    ) external nonReentrant {
+        Listing memory tempListing = lpToLockID[_lpaAddress][_lockId]; 
+        require(tempListing.forAuction, "No auction for this listing");
+
+        AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
+        if (currentAuction.endTime != 0){
+            require(block.timestamp < currentAuction.endTime, "Auction expired");
+        }
+
+        if (ethBid) {
+            require(currentAuction.topEthBid.ethBid > 0, "No ETH bid present");
+        }
+        else {
+            require(currentAuction.topDropsBid.dropsBid > 0, "No Drops bid present");
+        }
+
+        _returnBid(
+            _lpAddress, 
+            _lockId, 
+            ethBid, 
+            tempListing,
+            msg.sender
+        );
+
+    }
+    
+    function _returnBid(
+        address _lpAddress, 
+        uint256 _lockId, 
+        bool _eth, 
+        Listing _tempListing, 
+        address _sender
+    ) internal {
+        AuctionDetails storage currentAuction = auctions[_tempListing.auctionIndex];
+        if (_eth) {
+            require(currentAuction.topEthBid.bidder == _sender, "You are not the top ETH bidder");
+            address payable toSend = currentAuction.topEthBid.bidder;
+            uint256 amount = currentAuction.topEthBid.ethBid;
+            currentAuction.topEthBid = Bid(
+                address(0), 
+                0, 
+                0, 
+                tempListing.listingID
+            );
+
+            if (amount > 0) {
+                toSend.transfer(amount);
+
+                emit BidRedacted (
+                    _sender,
+                    _lpAddress, 
+                    _lockId, 
+                    0, 
+                    amount
+                );
+            }
+        }
+        else {
+            require(currentAuction.topDropsBid.bidder == _sender, "You are not the top Drops bidder");
+            address toSend = currentAuction.topDropsBid.bidder;
+            uint256 amount = currentAuction.topDropsBid.dropsBid;
+            currentAuction.topDropsBid = Bid(
+                address(0), 
+                0, 
+                0, 
+                tempListing.listingID
+            );
+
+            if (amount > 0) {
+                dropsToken.transfer(toSend,amount);
+
+                emit BidRedacted (
+                    _sender, 
+                    _lpAddress, 
+                    _lockId, 
+                    amount, 
+                    0
+                );
+            }
+        }
     }
 
     /// @notice Activate an initiated listing
     /// @dev The seller must have transfered lock ownership to address(this)
-    /// @param lpAddress Address of the LP token
-    /// @param lockID Unique lockID (per lpAddress) of the lock
-    function activateListing(address lpAddress, uint256 lockID) external {
-        Listing memory tempListing = lpToLockID[lpAddress][lockID];
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockId Unique lockID (per lpAddress) of the lock
+    function activateListing(address _lpAddress, uint256 _lockId) external {
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockId];
         require(tempListing.seller == msg.sender, "Lock doesnt belong to you.");
         require(!tempListing.isActive, "Listing already active.");
         require(!tempListing.isSold, "Listing already sold.");
         (, , , , , address owner) = uniswapV2Locker.tokenLocks(
-            lpAddress,
-            lockID
+            _lpAddress,
+            _lockId
         );
         require(owner == address(this), "Lock ownership not yet transferred.");
-        lpToLockID[lpAddress][lockID].isActive = true;
+        lpToLockID[_lpAddress][_lockId].isActive = true;
         activeListings++;
         emit NewActiveListing(
             tempListing.lpAddress,
@@ -302,20 +550,20 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     }
 
     function fetchListing(
-        address lpAddress,
-        uint256 lockID
+        address _lpAddress,
+        uint256 _lockID
     ) external view returns (Listing memory) {
-        return (lpToLockID[lpAddress][lockID]);
+        return (lpToLockID[_lpAddress][_lockID]);
     }
 
     /// @notice Purchase a listed LP token lock with ETH
-    /// @param lpAddress Address of the LP token
-    /// @param lockID The ID of the lock
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockID The ID of the lock
     function buyLockWithETH(
-        address lpAddress,
-        uint256 lockID
+        address _lpAddress,
+        uint256 _lockID
     ) external payable nonReentrant {
-        Listing memory tempListing = lpToLockID[lpAddress][lockID];
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
         require(tempListing.isActive, "Listing must be active.");
         require(tempListing.priceInETH > 0, "Listing not for sale in ETH.");
         require(
@@ -323,7 +571,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             "Incorrect amount of ETH."
         );
 
-        (bool lockFound, uint256 index) = _getIndex(lpAddress, tempListing);
+        (bool lockFound, uint256 index) = _getIndex(_lpAddress, tempListing);
 
         require(lockFound, "Mismatch in inputs");
 
@@ -341,14 +589,55 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
 
         payable(tempListing.seller).transfer(toPay);
 
-        lpToLockID[lpAddress][lockID].isActive = false;
-        lpToLockID[lpAddress][lockID].isSold = true;
+
+        if (tempListing.forAuction) {
+            AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
+
+            if(currentAuction.topDropsBid.dropsBid > 0 && currentAuction.topEthBid.ethBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    true, 
+                    _tempListing, 
+                    currentAuction.topEthBid.bidder
+                );
+
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    false, 
+                    _tempListing, 
+                    currentAuction.topDropsBid.bidder
+                );
+            }
+            else if (currentAuction.topEthBid.ethBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    true, 
+                    _tempListing, 
+                    currentAuction.topEthBid.bidder
+                );
+            }
+            else if (currentAuction.topDropsBid.dropsBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    false, 
+                    _tempListing, 
+                    currentAuction.topDropsBid.bidder
+                );
+            }
+        }
+
+        lpToLockID[_lpAddress][_lockID].isActive = false;
+        lpToLockID[_lpAddress][_lockID].isSold = true;
         activeListings--;
 
         uniswapV2Locker.transferLockOwnership(
-            lpAddress,
+            _lpAddress,
             index,
-            lockID,
+            _lockID,
             payable(msg.sender)
         );
 
@@ -362,13 +651,13 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
 
     /// @notice Purchase a listed LP token lock with Drops tokens
     /// @dev Requires approval to transfer Drops tokens to cover the purchase price
-    /// @param lpAddress Address of the LP token
-    /// @param lockID The ID of the lock
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockID The ID of the lock
     function buyLockWithDrops(
-        address lpAddress,
-        uint256 lockID
+        address _lpAddress,
+        uint256 _lockID
     ) external payable nonReentrant {
-        Listing memory tempListing = lpToLockID[lpAddress][lockID];
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
 
         require(tempListing.isActive, "Listing must be active.");
         require(tempListing.priceInDrops > 0, "Listing not for sale in Drops.");
@@ -377,7 +666,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             "Insufficient drops."
         );
 
-        (bool lockFound, uint256 index) = _getIndex(lpAddress, tempListing);
+        (bool lockFound, uint256 index) = _getIndex(_lpAddress, tempListing);
 
         require(lockFound, "Mismatch in inputs.");
         require(
@@ -388,14 +677,14 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             )
         );
 
-        lpToLockID[lpAddress][lockID].isActive = false;
-        lpToLockID[lpAddress][lockID].isSold = true;
+        lpToLockID[_lpAddress][_lockID].isActive = false;
+        lpToLockID[_lpAddress][_lockID].isSold = true;
         activeListings--;
 
         uniswapV2Locker.transferLockOwnership(
-            lpAddress,
+            _lpAddress,
             index,
-            lockID,
+            _lockID,
             payable(msg.sender)
         );
 
@@ -409,9 +698,9 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
     function getIndex(
         address _user,
         address _lpAddress,
-        uint256 _lockID
+        uint256 _lockId
     ) external view returns (bool, uint256) {
-        return _getIndexForUserLock(_lpAddress, _lockID, _user);
+        return _getIndexForUserLock(_lpAddress, _lockId, _user);
     }
 
     /// @notice Find unique (per lpAddress) lock index in order to transfer lock ownership
@@ -433,13 +722,13 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             lockFound = true;
         } else {
             for (index = 0; index < numLocksAtAddress; index++) {
-                (, , , , uint256 _lockID, ) = uniswapV2Locker
+                (, , , , uint256 _lockId, ) = uniswapV2Locker
                     .getUserLockForTokenAtIndex(
                         address(this),
                         _lpAddress,
                         index
                     );
-                if (_lockID == _listing.lockID) {
+                if (_lockId == _listing.lockID) {
                     lockFound = true;
                     break;
                 }
@@ -450,7 +739,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
 
     function _getIndexForUserLock(
         address _lpAddress,
-        uint256 _lockID,
+        uint256 _lockId,
         address user
     ) internal view returns (bool, uint256) {
         uint256 index;
@@ -466,7 +755,7 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
             for (index = 0; index < numLocksAtAddress; index++) {
                 (, , , , uint256 _tempLockID, ) = uniswapV2Locker
                     .getUserLockForTokenAtIndex(user, _lpAddress, index);
-                if (_tempLockID == _lockID) {
+                if (_tempLockID == _lockId) {
                     lockFound = true;
                     break;
                 }
@@ -477,69 +766,109 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
 
     /// @notice Withdraw a listed LP token lock
     /// @dev Only the seller can withdraw the listing
-    /// @param lpAddress Address of the LP token
-    /// @param lockID The ID of the lock
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockID The ID of the lock
     function withdrawListing(
-        address lpAddress,
-        uint256 lockID
+        address _lpAddress,
+        uint256 _lockID
     ) external nonReentrant {
-        Listing memory tempListing = lpToLockID[lpAddress][lockID];
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
         require(
             tempListing.seller == msg.sender,
             "This listing does not belong to you."
         );
 
         (, , , , , address owner) = uniswapV2Locker.tokenLocks(
-            lpAddress,
-            lockID
+            _lpAddress,
+            _lockID
         );
         require(owner == address(this), "Marketplace does not own your lock");
 
-        (bool lockFound, uint256 index) = _getIndex(lpAddress, tempListing);
+        (bool lockFound, uint256 index) = _getIndex(_lpAddress, tempListing);
 
         require(lockFound, "Mismatch in inputs.");
 
+        if (tempListing.forAuction) {
+            AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
+
+            if(currentAuction.topDropsBid.dropsBid > 0 && currentAuction.topEthBid.ethBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    true, 
+                    _tempListing, 
+                    currentAuction.topEthBid.bidder
+                );
+
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    false, 
+                    _tempListing, 
+                    currentAuction.topDropsBid.bidder
+                );
+            }
+            else if (currentAuction.topEthBid.ethBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    true, 
+                    _tempListing, 
+                    currentAuction.topEthBid.bidder
+                );
+            }
+            else if (currentAuction.topDropsBid.dropsBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    false, 
+                    _tempListing, 
+                    currentAuction.topDropsBid.bidder
+                );
+            }
+        }
+
         if (tempListing.isActive) {
-            lpToLockID[lpAddress][lockID].isActive = false;
+            lpToLockID[_lpAddress][_lockID].isActive = false;
             activeListings--;
         }
 
         uniswapV2Locker.transferLockOwnership(
-            lpAddress,
+            _lpAddress,
             index,
-            lockID,
+            _lockID,
             payable(msg.sender)
         );
 
-        emit ListingWithdrawn(lpAddress, lockID);
+        emit ListingWithdrawn(_lpAddress, _lockID);
     }
 
     /// @notice Verify a listing as safe
     /// @dev Only dev can verify listings
-    /// @param lpAddress Address of the LP token
-    /// @param lockID Unique lock ID (per lpAdress) of the lock
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockID Unique lock ID (per lpAdress) of the lock
     /// @param status Status of verification
     function verifyListing(
-        address lpAddress, 
-        uint256 lockID,
+        address _lpAddress, 
+        uint256 _lockID,
         bool status) external onlyOwner {
-            Listing storage tempListing = lpToLockID[lpAddress][lockID];
+            Listing storage tempListing = lpToLockID[_lpAddress][_lockID];
             require(status != tempListing.isVerified, "Must change listing status");
             tempListing.isVerified = true;
-            emit LockVerified(lpAddress, lockID, status);
+            emit LockVerified(_lpAddress, _lockID, status);
     }
 
     /// @notice Change the ETH price of a listing
     /// @dev Only seller can change price
-    /// @param lpAddress Address of the LP token
-    /// @param lockID Unique lock ID (per lpAddress) of the lock
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockID Unique lock ID (per lpAddress) of the lock
     /// @param newPriceInETH Updated ETH price of listing
     function changePriceInETH(
-        address lpAddress,
-        uint256 lockID,
+        address _lpAddress,
+        uint256 _lockID,
         uint256 newPriceInETH
     ) external nonReentrant {
-        Listing storage tempListing = lpToLockID[lpAddress][lockID];
+        Listing storage tempListing = lpToLockID[_lpAddress][_lockID];
         require(
             tempListing.seller == msg.sender,
             "This listing does not belong to you."
@@ -549,15 +878,15 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
 
     /// @notice Change the price of a listing in Drops
     /// @dev Only seller can change price
-    /// @param lpAddress Address of the LP token
-    /// @param lockID Unique lock ID (per lpAddress) of the lock
+    /// @param _lpAddress Address of the LP token
+    /// @param _lockID Unique lock ID (per lpAddress) of the lock
     /// @param newPriceInDrops Updated Drops price of listing
     function changePriceInDrops(
-        address lpAddress,
-        uint256 lockID,
+        address _lpAddress,
+        uint256 _lockID,
         uint256 newPriceInDrops
     ) external nonReentrant {
-        Listing storage tempListing = lpToLockID[lpAddress][lockID];
+        Listing storage tempListing = lpToLockID[_lpAddress][_lockID];
         require(
             tempListing.seller == msg.sender,
             "This listing does not belong to you."
@@ -567,25 +896,68 @@ contract DropsLockMarketplace is Ownable, ReentrancyGuard {
 
     /// @notice Return ownership of a lock to the original seller and remove the listing
     /// @dev Only the contract owner can call this function
-    /// @param lpAddress Address of the LP token associated with the lock
-    /// @param lockID The ID of the lock to be redacted
-    function redactListing(address lpAddress, uint256 lockID) external onlyOwner {
-        Listing storage listing = lpToLockID[lpAddress][lockID];
+    /// @param _lpAddress Address of the LP token associated with the lock
+    /// @param _lockID The ID of the lock to be redacted
+    function redactListing(
+        address _lpAddress, 
+        uint256 _lockID
+    ) external onlyOwner {
+        Listing storage listing = lpToLockID[_lpAddress][_lockID];
 
         require(listing.seller != address(0), "Listing does not exist.");
 
-        (bool lockFound, uint256 index) = _getIndex(lpAddress, listing);
+        (bool lockFound, uint256 index) = _getIndex(_lpAddress, listing);
         require(lockFound, "Lock not found.");
 
-        uniswapV2Locker.transferLockOwnership(lpAddress, index, lockID, listing.seller);
+        if (tempListing.forAuction) {
+            AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
+
+            if(currentAuction.topDropsBid.dropsBid > 0 && currentAuction.topEthBid.ethBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    true, 
+                    _tempListing, 
+                    currentAuction.topEthBid.bidder
+                );
+
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    false, 
+                    _tempListing, 
+                    currentAuction.topDropsBid.bidder
+                );
+            }
+            else if (currentAuction.topEthBid.ethBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    true, 
+                    _tempListing, 
+                    currentAuction.topEthBid.bidder
+                );
+            }
+            else if (currentAuction.topDropsBid.dropsBid > 0) {
+                _returnBid(
+                    _lpAddress, 
+                    _lockId, 
+                    false, 
+                    _tempListing, 
+                    currentAuction.topDropsBid.bidder
+                );
+            }
+        }
+
+        uniswapV2Locker.transferLockOwnership(_lpAddress, index, _lockID, listing.seller);
         
         if (listing.isActive) {
             listing.isActive = false;
             activeListings--;
         }
 
-        delete lpToLockID[lpAddress][lockID];
-        emit ListingRedacted(lpAddress, lockID, listing.seller);
+        delete lpToLockID[_lpAddress][_lockID];
+        emit ListingRedacted(_lpAddress, _lockID, listing.seller);
     }
 
 }
