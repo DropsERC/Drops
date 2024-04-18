@@ -119,7 +119,6 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
     struct AuctionDetails {
         Bid topEthBid;
         Bid topDropsBid;
-        uint256 endTime;
     }
 
     // lpAddress + lockID -> returns Listing
@@ -258,11 +257,10 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
         emit LockerAddressUpdated(_uniswapV2Locker);
     }
 
-    function _initializeAuctionDetails(uint256 _endTime) internal pure returns (AuctionDetails memory) {
+    function _initializeAuctionDetails(uint256 _listingId) internal pure returns (AuctionDetails memory) {
         AuctionDetails memory blankAuctionDetails;
-        blankAuctionDetails.topEthBid = Bid(address(0), 0, 0, ListingDetail(0, address(0)));
-        blankAuctionDetails.topDropsBid = Bid(address(0), 0, 0, ListingDetail(0, address(0)));
-        blankAuctionDetails.endTime = _endTime;
+        blankAuctionDetails.topEthBid = Bid(address(0), 0, 0, _listingId);
+        blankAuctionDetails.topDropsBid = Bid(address(0), 0, 0, _listingId);
 
         return blankAuctionDetails;
     }
@@ -280,8 +278,7 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
         uint256 _priceInETH,
         uint256 _priceInDrops,
         address payable _referral,
-        bool _forAuction,
-        uint256 _endTime
+        bool _forAuction
     ) external {
         (, , , , , address owner) = uniswapV2Locker.tokenLocks(
             _lpAddress,
@@ -303,9 +300,13 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
         if (tempListing.listingID == 0) {
             listingCount++;
             listingDetail[listingCount] = ListingDetail(_lockId, _lpAddress);
+            AuctionDetails memory tempDetails = _initializeAuctionDetails(listingCount);
+        }
+        else {
+            AuctionDetails memory tempDetails = _initializeAuctionDetails(tempListing.listingID);
         }
 
-        AuctionDetails memory tempDetails = _initializeAuctionDetails(_endTime);
+        
 
         lpToLockID[_lpAddress][_lockId] = Listing(
             _lockId,
@@ -349,11 +350,6 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
         require(!tempListing.isSold, "Listing already sold.");
 
         AuctionDetails storage currentAuction = auctions[tempListing.auctionIndex];
-
-        if(currentAuction.endTime != 0) {
-            require(block.timestamp < currentAuction.endTime, "Auction closed");
-        }
-
 
         require(msg.value > currentAuction.topEthBid.ethBid, "Must outbid current highest bid");
         
@@ -399,10 +395,6 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
 
         AuctionDetails storage currentAuction = auctions[tempListing.auctionIndex];
 
-        if(currentAuction.endTime != 0) {
-            require(block.timestamp < currentAuction.endTime, "Auction closed");
-        }
-
         require(_amount > currentAuction.topDropsBid.dropsBid, "Must outbid current highest bid");
         
         if(currentAuction.topDropsBid.dropsBid > 0) {
@@ -444,13 +436,10 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
         uint256 _lockId,  
         bool ethBid
     ) external nonReentrant {
-        Listing memory tempListing = lpToLockID[_lpaAddress][_lockId]; 
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockId]; 
         require(tempListing.forAuction, "No auction for this listing");
 
         AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
-        if (currentAuction.endTime != 0){
-            require(block.timestamp < currentAuction.endTime, "Auction expired");
-        }
 
         if (ethBid) {
             require(currentAuction.topEthBid.ethBid > 0, "No ETH bid present");
@@ -473,19 +462,19 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
         address _lpAddress, 
         uint256 _lockId, 
         bool _eth, 
-        Listing _tempListing, 
+        Listing memory _tempListing, 
         address _sender
     ) internal {
         AuctionDetails storage currentAuction = auctions[_tempListing.auctionIndex];
         if (_eth) {
             require(currentAuction.topEthBid.bidder == _sender, "You are not the top ETH bidder");
-            address payable toSend = currentAuction.topEthBid.bidder;
+            address payable toSend = payable(currentAuction.topEthBid.bidder);
             uint256 amount = currentAuction.topEthBid.ethBid;
             currentAuction.topEthBid = Bid(
                 address(0), 
                 0, 
                 0, 
-                tempListing.listingID
+                _tempListing.listingID
             );
 
             if (amount > 0) {
@@ -508,7 +497,7 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
                 address(0), 
                 0, 
                 0, 
-                tempListing.listingID
+                _tempListing.listingID
             );
 
             if (amount > 0) {
@@ -558,40 +547,40 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
 
     /// @notice Purchase a listed LP token lock with ETH
     /// @param _lpAddress Address of the LP token
-    /// @param _lockID The ID of the lock
+    /// @param _lockId The ID of the lock
     function buyLockWithETH(
         address _lpAddress,
-        uint256 _lockID
+        uint256 _lockId
     ) external payable nonReentrant {
-        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
-        require(tempListing.isActive, "Listing must be active.");
-        require(tempListing.priceInETH > 0, "Listing not for sale in ETH.");
+        Listing memory _tempListing = lpToLockID[_lpAddress][_lockId];
+        require(_tempListing.isActive, "Listing must be active.");
+        require(_tempListing.priceInETH > 0, "Listing not for sale in ETH.");
         require(
-            msg.value == tempListing.priceInETH,
+            msg.value == _tempListing.priceInETH,
             "Incorrect amount of ETH."
         );
 
-        (bool lockFound, uint256 index) = _getIndex(_lpAddress, tempListing);
+        (bool lockFound, uint256 index) = _getIndex(_lpAddress, _tempListing);
 
         require(lockFound, "Mismatch in inputs");
 
         uint256 feeAmount = msg.value / ethFee;
         uint256 toPay = msg.value - feeAmount;
 
-        if (tempListing.referral != zeroAddress) {
+        if (_tempListing.referral != zeroAddress) {
             uint256 feeForReferral = (feeAmount * referralBonus) / ethFee;
             feeAmount = feeAmount - feeForReferral;
-            tempListing.referral.transfer(feeForReferral);
+            _tempListing.referral.transfer(feeForReferral);
             feeWallet.transfer(feeAmount);
         } else {
             feeWallet.transfer(feeAmount);
         }
 
-        payable(tempListing.seller).transfer(toPay);
+        payable(_tempListing.seller).transfer(toPay);
 
 
-        if (tempListing.forAuction) {
-            AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
+        if (_tempListing.forAuction) {
+            AuctionDetails memory currentAuction = auctions[_tempListing.auctionIndex];
 
             if(currentAuction.topDropsBid.dropsBid > 0 && currentAuction.topEthBid.ethBid > 0) {
                 _returnBid(
@@ -630,20 +619,20 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
             }
         }
 
-        lpToLockID[_lpAddress][_lockID].isActive = false;
-        lpToLockID[_lpAddress][_lockID].isSold = true;
+        lpToLockID[_lpAddress][_lockId].isActive = false;
+        lpToLockID[_lpAddress][_lockId].isSold = true;
         activeListings--;
 
         uniswapV2Locker.transferLockOwnership(
             _lpAddress,
             index,
-            _lockID,
+            _lockId,
             payable(msg.sender)
         );
 
         emit LockPurchasedWithETH(
-            tempListing.lpAddress,
-            tempListing.lockID,
+            _tempListing.lpAddress,
+            _tempListing.lockID,
             toPay,
             feeAmount
         );
@@ -767,12 +756,12 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
     /// @notice Withdraw a listed LP token lock
     /// @dev Only the seller can withdraw the listing
     /// @param _lpAddress Address of the LP token
-    /// @param _lockID The ID of the lock
+    /// @param _lockId The ID of the lock
     function withdrawListing(
         address _lpAddress,
-        uint256 _lockID
+        uint256 _lockId
     ) external nonReentrant {
-        Listing memory tempListing = lpToLockID[_lpAddress][_lockID];
+        Listing memory tempListing = lpToLockID[_lpAddress][_lockId];
         require(
             tempListing.seller == msg.sender,
             "This listing does not belong to you."
@@ -780,7 +769,7 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
 
         (, , , , , address owner) = uniswapV2Locker.tokenLocks(
             _lpAddress,
-            _lockID
+            _lockId
         );
         require(owner == address(this), "Marketplace does not own your lock");
 
@@ -796,7 +785,7 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
                     _lpAddress, 
                     _lockId, 
                     true, 
-                    _tempListing, 
+                    tempListing, 
                     currentAuction.topEthBid.bidder
                 );
 
@@ -804,7 +793,7 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
                     _lpAddress, 
                     _lockId, 
                     false, 
-                    _tempListing, 
+                    tempListing, 
                     currentAuction.topDropsBid.bidder
                 );
             }
@@ -813,7 +802,7 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
                     _lpAddress, 
                     _lockId, 
                     true, 
-                    _tempListing, 
+                    tempListing, 
                     currentAuction.topEthBid.bidder
                 );
             }
@@ -822,25 +811,25 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
                     _lpAddress, 
                     _lockId, 
                     false, 
-                    _tempListing, 
+                    tempListing, 
                     currentAuction.topDropsBid.bidder
                 );
             }
         }
 
         if (tempListing.isActive) {
-            lpToLockID[_lpAddress][_lockID].isActive = false;
+            lpToLockID[_lpAddress][_lockId].isActive = false;
             activeListings--;
         }
 
         uniswapV2Locker.transferLockOwnership(
             _lpAddress,
             index,
-            _lockID,
+            _lockId,
             payable(msg.sender)
         );
 
-        emit ListingWithdrawn(_lpAddress, _lockID);
+        emit ListingWithdrawn(_lpAddress, _lockId);
     }
 
     /// @notice Verify a listing as safe
@@ -897,20 +886,20 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
     /// @notice Return ownership of a lock to the original seller and remove the listing
     /// @dev Only the contract owner can call this function
     /// @param _lpAddress Address of the LP token associated with the lock
-    /// @param _lockID The ID of the lock to be redacted
+    /// @param _lockId The ID of the lock to be redacted
     function redactListing(
         address _lpAddress, 
-        uint256 _lockID
+        uint256 _lockId
     ) external onlyOwner {
-        Listing storage listing = lpToLockID[_lpAddress][_lockID];
+        Listing storage _tempListing = lpToLockID[_lpAddress][_lockId];
 
-        require(listing.seller != address(0), "Listing does not exist.");
+        require(_tempListing.seller != address(0), "Listing does not exist.");
 
-        (bool lockFound, uint256 index) = _getIndex(_lpAddress, listing);
+        (bool lockFound, uint256 index) = _getIndex(_lpAddress, _tempListing);
         require(lockFound, "Lock not found.");
 
-        if (tempListing.forAuction) {
-            AuctionDetails memory currentAuction = auctions[tempListing.auctionIndex];
+        if (_tempListing.forAuction) {
+            AuctionDetails memory currentAuction = auctions[_tempListing.auctionIndex];
 
             if(currentAuction.topDropsBid.dropsBid > 0 && currentAuction.topEthBid.ethBid > 0) {
                 _returnBid(
@@ -949,15 +938,15 @@ contract DropsUnicryptMarketplace is Ownable, ReentrancyGuard {
             }
         }
 
-        uniswapV2Locker.transferLockOwnership(_lpAddress, index, _lockID, listing.seller);
+        uniswapV2Locker.transferLockOwnership(_lpAddress, index, _lockId, _tempListing.seller);
         
-        if (listing.isActive) {
-            listing.isActive = false;
+        if (_tempListing.isActive) {
+            _tempListing.isActive = false;
             activeListings--;
         }
 
-        delete lpToLockID[_lpAddress][_lockID];
-        emit ListingRedacted(_lpAddress, _lockID, listing.seller);
+        delete lpToLockID[_lpAddress][_lockId];
+        emit ListingRedacted(_lpAddress, _lockId, _tempListing.seller);
     }
 
 }
