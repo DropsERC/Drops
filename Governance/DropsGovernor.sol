@@ -8,11 +8,11 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface IDropsTier {
     struct UserInfo {
-        uint256 amount; // How many staked tokens the user has provided
-        uint256 rewardDebt; // Reward debt
+        uint256 amount;
+        uint256 rewardDebt;
         uint256 noWithdrawalFeeAfter;
         uint256 depositTime;
-        uint256 rewardLockedUp; // Reward locked up.
+        uint256 rewardLockedUp;
     }
 
     function userInfo(address user) external view returns (UserInfo memory);
@@ -24,7 +24,7 @@ contract DROPSDAO {
     IERC20 public dropsToken;
     IDropsTier public dropsTier02;
     IDropsTier public dropsTier03;
-    uint256 public constant MIN_PROPOSAL_AMOUNT = 150000 * 10 ** 18; // Adjust decimals accordingly
+    uint256 public constant MIN_PROPOSAL_AMOUNT = 150000 * 10 ** 18;
     uint256 public constant VOTING_QUORUM_PERCENTAGE = 15;
 
     struct Proposal {
@@ -94,10 +94,6 @@ contract DROPSDAO {
         bool passed = proposal.yesVotes > proposal.noVotes;
 
         proposal.executed = true;
-
-        if (passed) {
-            // Implement the logic for the passed proposal here
-        }
 
         dropsToken.transfer(proposal.proposer, MIN_PROPOSAL_AMOUNT);
 
